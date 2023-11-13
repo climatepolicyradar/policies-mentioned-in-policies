@@ -1,0 +1,6 @@
+*.pkl
+
+data/**/*
+!data/**/
+!**/.gitkeep
+!**/README.md

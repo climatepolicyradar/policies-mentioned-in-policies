@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "policies-mentioned-in-policies"
+version = "0.1.0"
+description = ""
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+neomodel = "^5.1.1"
+httpx = "^0.25.0"
+pydantic = "^2.3.0"
+rich = "^13.5.3"
+cpr_data_access = {git = "https://github.com/climatepolicyradar/data-access.git", tag = "0.3.0"}
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
