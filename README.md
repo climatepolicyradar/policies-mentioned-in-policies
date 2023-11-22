@@ -22,6 +22,8 @@ If you just want an overview of a load of random relationships, run `MATCH p=()-
 
 ## Findings
 
+![](./graph.png)
+
 It's very easy to find matches, but I think a lot of them are false positives! Snippets of text like "Climate Policy Act" appear all over the place but aren't necessarily referring to a specific policy paper.
 
 I expected that the biggest hurdle would be coming up with a way of smartly, fuzzily matching the policy names to increase recall, but it seems like the opposite is true!
