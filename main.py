@@ -22,7 +22,7 @@ clear_neo4j()
 
 
 # load the dataset from disk if it exists, otherwise download it from huggingface
-dataset_path = Path("dataset.pkl")
+dataset_path = Path("data/dataset.pkl")
 if dataset_path.exists():
     with console.status("Loading dataset from disk..."):
         with open(dataset_path, "rb") as f:
@@ -31,7 +31,7 @@ else:
     with console.status("Loading dataset from huggingface..."):
         dataset = Dataset(
             CPRDocument, cdn_domain="cdn.climatepolicyradar.org"
-        ).from_huggingface(limit=1_000)
+        ).from_huggingface()
     with console.status("Saving dataset to disk for future runs..."):
         with open(dataset_path, "wb") as f:
             pickle.dump(dataset, f)
@@ -45,21 +45,23 @@ node_creation_progress_bar = track(
 )
 
 for document in node_creation_progress_bar:
-    document_node = DocumentNode(
-        document_id=document.document_id,
-        name=document.document_name,
-    ).get_or_create()
+    document_node = DocumentNode.get_or_create(
+        {
+            "document_id": document.document_id,
+            "document_name": document.document_name,
+        }
+    )[0]
 
     if document.document_metadata is not None:
-        family_nodes = FamilyNode(
-            family_id=document.document_metadata.family_slug,
-            name=document.document_metadata.family_name,
-        ).get_or_create()
-        if len(family_nodes) == 1:
-            family_nodes[0].documents.connect(document_node)
+        family_node = FamilyNode.get_or_create(
+            {
+                "family_id": document.document_metadata.family_id,
+                "family_name": document.document_metadata.family_name,
+            },
+        )[0]
+        document_node.family.connect(family_node)
 
 console.print("✔️ Created documents and families!", style="bold green")
-
 
 # create links between documents which mention each other
 linking_progress_bar = track(
@@ -82,13 +84,12 @@ for document_i in linking_progress_bar:
             node_i = DocumentNode.nodes.get(document_id=document_i.document_id)
             node_j = DocumentNode.nodes.get(document_id=document_j.document_id)
             node_i.mentions.connect(node_j)
-            mentions.append((document_j.document_name, document_i.document_name))
-        
+            mentions.append((document_i.document_name, document_j.document_name))
 
-
-for mention in mentions:
+for found_in_title, title in mentions:
     console.print(
-        f"Found mention of [bold magenta]{mention[0]}[/bold magenta] in [bold blue]{mention[1]}[/bold blue]",
+        f"Found mention of [bold magenta]{title}[/bold magenta] "
+        f"in [bold blue]{found_in_title}[/bold blue]",
         end="\n",
     )
 

@@ -19,3 +19,9 @@ To shut everything down, run `docker compose down`.
 Make sure the neo4j container is running using the instructions above and then, when it's running, navigate to `http://localhost:7474/browser/`. Use the username `neo4j` and password `password` to log in. You should then be able to run cypher queries against the database.
 
 If you just want an overview of a load of random relationships, run `MATCH p=()-->() WITH p, rand() AS r ORDER BY r RETURN p LIMIT 1000`.
+
+## Findings
+
+It's very easy to find matches, but I think a lot of them are false positives! Snippets of text like "Climate Policy Act" appear all over the place but aren't necessarily referring to a specific policy paper.
+
+I expected that the biggest hurdle would be coming up with a way of smartly, fuzzily matching the policy names to increase recall, but it seems like the opposite is true!
