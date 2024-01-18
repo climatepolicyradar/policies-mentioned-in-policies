@@ -2,7 +2,7 @@ from pathlib import Path
 import pickle
 import neomodel
 from src.models import FamilyNode, DocumentNode
-from src.text import normalise_text
+from src.text import normalise_text, check_document_mention
 from cpr_data_access.models import Dataset, CPRDocument
 from src.neo4j import wait_for_neo4j, clear_neo4j
 from rich.console import Console
@@ -16,7 +16,7 @@ console = Console(
 )
 
 # set up a connection to the neo4j database and clear whatever is there
-neomodel.db.set_connection("bolt://neo4j:password@localhost:7687")
+neomodel.db.set_connection("bolt://neo4j:password@localhost:7689")
 wait_for_neo4j()
 clear_neo4j()
 
@@ -38,6 +38,7 @@ else:
 
 console.print("✔️ Loaded dataset!", style="bold green")
 
+dataset = dataset[:1000]
 
 # create the nodes for the families and documents
 node_creation_progress_bar = track(
@@ -73,19 +74,29 @@ linking_progress_bar = track(
 mentions = []
 for document_i in linking_progress_bar:
     full_text_i = " ".join(
-        [passasge for block in document_i.text_blocks for passasge in block.text]
+        [passage for block in document_i.text_blocks for passage in block.text]
     )
     full_text_i = normalise_text(full_text_i)
     for document_j in dataset:
         if document_i.document_id == document_j.document_id:
             continue
         title_j = normalise_text(document_j.document_name)
-        if title_j in full_text_i:
+        if (check_document_mention(document_i, document_j, title_j, full_text_i)
+                and (document_i.document_name, document_j.document_name) not in mentions):
             node_i = DocumentNode.nodes.get(document_id=document_i.document_id)
             node_j = DocumentNode.nodes.get(document_id=document_j.document_id)
             node_i.mentions.connect(node_j)
+            if document_j.document_metadata.geography_iso is not document_i.document_metadata.geography_iso:
+                console.print(
+                    f"\n Found mention of [bold magenta]{document_j.document_name}[/bold magenta] "
+                    f" {document_j.document_metadata} {document_j.translated} "
+                    f"in [bold blue]{document_i.document_name}[/bold blue]"
+                    f" {document_i.document_metadata.geography} {document_i.translated}",
+                    end="\n",
+                )
             mentions.append((document_i.document_name, document_j.document_name))
 
+console.print(len(mentions))
 for found_in_title, title in mentions:
     console.print(
         f"Found mention of [bold magenta]{title}[/bold magenta] "
