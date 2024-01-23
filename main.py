@@ -2,7 +2,7 @@ from pathlib import Path
 import pickle
 import neomodel
 from src.models import FamilyNode, DocumentNode
-from src.text import normalise_text, check_document_mention
+from src.text import normalise_text, check_document_geography
 from cpr_data_access.models import Dataset, CPRDocument
 from src.neo4j import wait_for_neo4j, clear_neo4j
 from rich.console import Console
@@ -38,7 +38,7 @@ else:
 
 console.print("✔️ Loaded dataset!", style="bold green")
 
-dataset = dataset[:1000]
+#dataset = dataset[:700]
 
 # create the nodes for the families and documents
 node_creation_progress_bar = track(
@@ -71,17 +71,30 @@ linking_progress_bar = track(
     transient=True,
 )
 
+import pandas as pd
+
+# Replace 'your_data' with your actual dataset
+df = pd.DataFrame({
+    'title': [document.document_name for document in dataset],
+    'country': [document.document_metadata.geography_iso for document in dataset],
+    'date': [document.document_metadata.publication_ts for document in dataset]
+})
+
+# Find duplicates based on country and title, but different dates
+different_dates_duplicates = df[df.duplicated(['country', 'title'], keep=False) & ~df.duplicated(['country', 'title', 'date'], keep=False)]
+
+# Display the instances with duplicate country and title, but different dates
+print(different_dates_duplicates)
+
 mentions = []
 for document_i in linking_progress_bar:
-    full_text_i = " ".join(
-        [passage for block in document_i.text_blocks for passage in block.text]
-    )
-    full_text_i = normalise_text(full_text_i)
     for document_j in dataset:
         if document_i.document_id == document_j.document_id:
             continue
-        title_j = normalise_text(document_j.document_name)
-        if (check_document_mention(document_i, document_j, title_j, full_text_i)
+        if (check_document_geography(document_i, document_j)
+                # Check if mentioned document was published before the document it is mentioned in
+                and (document_j.document_metadata.publication_ts < document_i.document_metadata.publication_ts)
+                # Only show unique mentions
                 and (document_i.document_name, document_j.document_name) not in mentions):
             node_i = DocumentNode.nodes.get(document_id=document_i.document_id)
             node_j = DocumentNode.nodes.get(document_id=document_j.document_id)
@@ -109,3 +122,46 @@ console.print(
     "✔️ Connected all documents which mention each other!", style="bold green"
 )
 console.print("✔️ Done!", style="bold green")
+
+
+# Create training data out of documents mentioned and the things they are mentioned in
+
+# Define the NER model and train it
+import spacy
+from spacy.training.example import Example
+
+# Load a blank English model
+nlp = spacy.blank("en")
+
+# Add NER to the pipeline
+ner = nlp.add_pipe("ner")
+
+# Add the 'POLICY' label to the NER model
+ner.add_label("POLICY")
+
+# Train the model
+nlp.begin_training()
+
+# Train for a few epochs (increase if necessary)
+for epoch in range(10):
+    for text, annotations in training_data:
+        # Check if the annotated entity is more than one word and capitalized
+        if annotations['entities'][0][0] != annotations['entities'][0][1] and text[annotations['entities'][0][0]:annotations['entities'][0][1]].istitle():
+            example = Example.from_dict(nlp.make_doc(text), annotations)
+            nlp.update([example], drop=0.5)  # Adjust the dropout rate as needed
+
+# Save the trained model
+nlp.to_disk("policy_ner_model")
+
+# Load the trained model
+trained_nlp = spacy.load("policy_ner_model")
+
+policy_mentions_ner = []
+
+# replace text_blocks with each documents and their text
+for text in text_blocks:
+    doc = trained_nlp(text)
+    policy_entities = [ent.text for ent in doc.ents if ent.label_ == 'POLICY']
+    policy_mentions_ner.extend(policy_entities)
+
+print("Policy Mentions:", policy_mentions_ner)
