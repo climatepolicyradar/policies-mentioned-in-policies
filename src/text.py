@@ -12,6 +12,8 @@ def normalise_text(input_string: str) -> str:
     clean_string = re.sub(r"[^\x00-\x7F]+", "", clean_string)
     # remove punctuation
     clean_string = re.sub(r"[^\w\s]", "", clean_string)
+    # remove parentheses
+    clean_string = re.sub(r'\([^)]*\)', '', clean_string)
     return clean_string
 
 def find_title_and_geography(text_blocks, title, geography):
@@ -20,8 +22,8 @@ def find_title_and_geography(text_blocks, title, geography):
            # Check if geography is in the current text block or the surrounding 3 text blocks
            for j in range(max(0, i-3), min(len(text_blocks), i+4)):
                if geography in text_blocks[j]:
-                   return True
-   return False
+                   return True, text_blocks[j]
+   return False, ""
 
 def update_geography(document_j):
     new_geography = "nan"
@@ -42,7 +44,6 @@ def update_geography(document_j):
 
     return new_geography
 
-
 def check_document_geography(document_i, document_j):
     full_text_i = " ".join(
         [passage for block in document_i.text_blocks for passage in block.text]
@@ -52,7 +53,11 @@ def check_document_geography(document_i, document_j):
 
     # If the mention document and the document have the same geography, high likelihood of real mention
     if document_i.document_metadata.geography_iso == document_j.document_metadata.geography_iso:
-        exists = title_j.lower() in full_text_i.lower()
+        for block in document_i.text_blocks:
+            for passage in block.text:
+                text_i = normalise_text(passage).lower()
+                if title_j.lower() in text_i:
+                    return True, text_i
     else:
         # Check if the geography of the document is also mentioned in the text
         if document_j.document_metadata.geography == "nan":
@@ -62,8 +67,12 @@ def check_document_geography(document_i, document_j):
 
         if document_j.document_metadata.geography != "nan":
             text_blocks = [passage for block in document_i.text_blocks for passage in block.text]
-            exists = find_title_and_geography(text_blocks, title_j, document_j.document_metadata.geography)
+            return find_title_and_geography(text_blocks, title_j, document_j.document_metadata.geography)
         else:
-            exists = title_j in full_text_i
+            for block in document_i.text_blocks:
+                for passage in block.text:
+                    text_i = normalise_text(passage)
+                    if title_j in text_i:
+                        return True, text_i
 
-    return exists
+    return False, ""

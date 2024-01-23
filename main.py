@@ -1,6 +1,7 @@
 from pathlib import Path
 import pickle
 import neomodel
+import csv
 from src.models import FamilyNode, DocumentNode
 from src.text import normalise_text, check_document_geography
 from cpr_data_access.models import Dataset, CPRDocument
@@ -38,7 +39,7 @@ else:
 
 console.print("✔️ Loaded dataset!", style="bold green")
 
-#dataset = dataset[:700]
+dataset = dataset[:200]
 
 # create the nodes for the families and documents
 node_creation_progress_bar = track(
@@ -71,31 +72,17 @@ linking_progress_bar = track(
     transient=True,
 )
 
-import pandas as pd
-
-# Replace 'your_data' with your actual dataset
-df = pd.DataFrame({
-    'title': [document.document_name for document in dataset],
-    'country': [document.document_metadata.geography_iso for document in dataset],
-    'date': [document.document_metadata.publication_ts for document in dataset]
-})
-
-# Find duplicates based on country and title, but different dates
-different_dates_duplicates = df[df.duplicated(['country', 'title'], keep=False) & ~df.duplicated(['country', 'title', 'date'], keep=False)]
-
-# Display the instances with duplicate country and title, but different dates
-print(different_dates_duplicates)
-
 mentions = []
 for document_i in linking_progress_bar:
     for document_j in dataset:
         if document_i.document_id == document_j.document_id:
             continue
-        if (check_document_geography(document_i, document_j)
+        exists, found_block = check_document_geography(document_i, document_j)
+        if (exists
                 # Check if mentioned document was published before the document it is mentioned in
                 and (document_j.document_metadata.publication_ts < document_i.document_metadata.publication_ts)
                 # Only show unique mentions
-                and (document_i.document_name, document_j.document_name) not in mentions):
+                and (document_i.document_name, document_j.document_name, found_block) not in mentions):
             node_i = DocumentNode.nodes.get(document_id=document_i.document_id)
             node_j = DocumentNode.nodes.get(document_id=document_j.document_id)
             node_i.mentions.connect(node_j)
@@ -107,15 +94,23 @@ for document_i in linking_progress_bar:
                     f" {document_i.document_metadata.geography} {document_i.translated}",
                     end="\n",
                 )
-            mentions.append((document_i.document_name, document_j.document_name))
+            mentions.append((document_i.document_name, document_j.document_name, found_block))
 
 console.print(len(mentions))
-for found_in_title, title in mentions:
+for found_in_title, title, found_block in mentions:
     console.print(
         f"Found mention of [bold magenta]{title}[/bold magenta] "
         f"in [bold blue]{found_in_title}[/bold blue]",
         end="\n",
     )
+
+# Specify the file name
+csv_file = 'output.csv'
+
+# Write the list of tuples to a CSV file
+with open(csv_file, 'w', newline='') as file:
+    writer = csv.writer(file)
+    writer.writerows(mentions)
 
 
 console.print(
