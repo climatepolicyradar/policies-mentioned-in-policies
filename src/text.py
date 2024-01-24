@@ -5,7 +5,6 @@ import pandas as pd
 csv_url = "https://github.com/lukes/ISO-3166-Countries-with-Regional-Codes/raw/master/all/all.csv"
 iso_df = pd.read_csv(csv_url)
 
-
 def normalise_text(input_string: str) -> str:
     # remove newlines and multiple spaces
     clean_string = re.sub(r"\s+", " ", input_string).strip()
@@ -20,11 +19,11 @@ def normalise_text(input_string: str) -> str:
 
 def find_title_and_geography(text_blocks, title, geography):
     for i, text in enumerate(text_blocks):
-        if title in text:
-            # Check if geography is in the current text block or the surrounding 3 text blocks
-            for j in range(max(0, i - 3), min(len(text_blocks), i + 4)):
+        if normalise_text(title) in normalise_text(text):
+            # Check if geography is in the current text block or the surrounding 2 text blocks
+            for j in range(max(0, i - 2), min(len(text_blocks), i + 2)):
                 if geography in text_blocks[j]:
-                    return True, text_blocks[j]
+                    return True, text
     return False, ""
 
 
@@ -49,19 +48,14 @@ def update_geography(document_j):
 
 
 def check_document_geography(document_i, document_j):
-    full_text_i = " ".join(
-        [passage for block in document_i.text_blocks for passage in block.text]
-    )
-    full_text_i = normalise_text(full_text_i)
     title_j = normalise_text(document_j.document_name)
 
     # If the mention document and the document have the same geography, high likelihood of real mention
     if document_i.document_metadata.geography_iso == document_j.document_metadata.geography_iso:
         for block in document_i.text_blocks:
             for passage in block.text:
-                text_i = normalise_text(passage).lower()
-                if title_j.lower() in text_i:
-                    return True, text_i
+                if title_j.lower() in normalise_text(passage).lower():
+                    return True, passage
     else:
         # Check if the geography of the document is also mentioned in the text
         if document_j.document_metadata.geography == "nan":
@@ -75,8 +69,7 @@ def check_document_geography(document_i, document_j):
         else:
             for block in document_i.text_blocks:
                 for passage in block.text:
-                    text_i = normalise_text(passage)
-                    if title_j in text_i:
-                        return True, text_i
+                    if title_j in normalise_text(passage):
+                        return True, passage
 
     return False, ""

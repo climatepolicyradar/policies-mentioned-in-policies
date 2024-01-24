@@ -2,6 +2,8 @@ from pathlib import Path
 import pickle
 import neomodel
 import csv
+import concurrent.futures
+from multiprocessing import Manager
 from src.models import FamilyNode, DocumentNode
 from src.text import normalise_text, check_document_geography
 from cpr_data_access.models import Dataset, CPRDocument
@@ -72,29 +74,56 @@ linking_progress_bar = track(
     transient=True,
 )
 
-mentions = []
-for document_i in linking_progress_bar:
+def process_document(document_i, dataset, progress_list):
+    mentions = []
+
     for document_j in dataset:
         if document_i.document_id == document_j.document_id:
             continue
-        exists, found_block = check_document_geography(document_i, document_j)
-        if (exists
-                # Check if mentioned document was published before the document it is mentioned in
-                and (document_j.document_metadata.publication_ts < document_i.document_metadata.publication_ts)
-                # Only show unique mentions
-                and (document_i.document_name, document_j.document_name, found_block) not in mentions):
-            node_i = DocumentNode.nodes.get(document_id=document_i.document_id)
-            node_j = DocumentNode.nodes.get(document_id=document_j.document_id)
-            node_i.mentions.connect(node_j)
-            if document_j.document_metadata.geography_iso is not document_i.document_metadata.geography_iso:
-                console.print(
-                    f"\n Found mention of [bold magenta]{document_j.document_name}[/bold magenta] "
-                    f" {document_j.document_metadata} {document_j.translated} "
-                    f"in [bold blue]{document_i.document_name}[/bold blue]"
-                    f" {document_i.document_metadata.geography} {document_i.translated}",
-                    end="\n",
-                )
-            mentions.append((document_i.document_name, document_j.document_name, found_block))
+
+        if document_j.document_metadata.publication_ts < document_i.document_metadata.publication_ts:
+            exists, found_block = check_document_geography(document_i, document_j)
+
+            if exists and (document_i.document_name, document_j.document_name, found_block) not in mentions:
+                node_i = DocumentNode.nodes.get(document_id=document_i.document_id)
+                node_j = DocumentNode.nodes.get(document_id=document_j.document_id)
+                node_i.mentions.connect(node_j)
+
+                if document_j.document_metadata.geography_iso != document_i.document_metadata.geography_iso:
+                    console.print(
+                        f"\n Found mention of [bold magenta]{document_j.document_name}[/bold magenta] "
+                        f" {document_j.document_metadata} {document_j.translated} "
+                        f"in [bold blue]{document_i.document_name}[/bold blue]"
+                        f" {document_i.document_metadata.geography} {document_i.translated}",
+                        end="\n",
+                    )
+                mentions.append((document_i.document_name, document_j.document_name, found_block))
+    # Update progress
+    progress_list.append(1)
+    console.print(f"Document {document_i.document_name} mentions: {len(mentions)}")
+
+    return mentions
+
+def parallel_process_documents(dataset):
+    mentions = []
+    if __name__ == '__main__':
+        with Manager() as manager:
+            progress_list = manager.list()
+
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                # Process documents in parallel
+                futures = [executor.submit(process_document, document_i, dataset, progress_list) for document_i in linking_progress_bar]
+                # Wait for all threads to finish
+                concurrent.futures.wait(futures)
+
+            # Combine the results from all processed documents
+            for future in concurrent.futures.as_completed(futures):
+                mentions.extend(future.result())
+
+    return mentions
+
+# Call the parallel processing function
+mentions = parallel_process_documents(dataset)
 
 console.print(len(mentions))
 for found_in_title, title, found_block in mentions:
