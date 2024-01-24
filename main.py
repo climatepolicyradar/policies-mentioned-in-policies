@@ -39,7 +39,7 @@ else:
 
 console.print("✔️ Loaded dataset!", style="bold green")
 
-dataset = dataset[:200]
+#dataset = dataset[:200]
 
 # create the nodes for the families and documents
 node_creation_progress_bar = track(

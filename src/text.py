@@ -5,6 +5,7 @@ import pandas as pd
 csv_url = "https://github.com/lukes/ISO-3166-Countries-with-Regional-Codes/raw/master/all/all.csv"
 iso_df = pd.read_csv(csv_url)
 
+
 def normalise_text(input_string: str) -> str:
     # remove newlines and multiple spaces
     clean_string = re.sub(r"\s+", " ", input_string).strip()
@@ -16,14 +17,16 @@ def normalise_text(input_string: str) -> str:
     clean_string = re.sub(r'\([^)]*\)', '', clean_string)
     return clean_string
 
+
 def find_title_and_geography(text_blocks, title, geography):
-   for i, text in enumerate(text_blocks):
-       if title in text:
-           # Check if geography is in the current text block or the surrounding 3 text blocks
-           for j in range(max(0, i-3), min(len(text_blocks), i+4)):
-               if geography in text_blocks[j]:
-                   return True, text_blocks[j]
-   return False, ""
+    for i, text in enumerate(text_blocks):
+        if title in text:
+            # Check if geography is in the current text block or the surrounding 3 text blocks
+            for j in range(max(0, i - 3), min(len(text_blocks), i + 4)):
+                if geography in text_blocks[j]:
+                    return True, text_blocks[j]
+    return False, ""
+
 
 def update_geography(document_j):
     new_geography = "nan"
@@ -31,9 +34,9 @@ def update_geography(document_j):
     if geography_iso == "EUR":
         geography_iso = "EUU"
     try:
-        new_geography = pycountry.countries.get(alpha_3=geography_iso)
-        if new_geography:
-            return new_geography.name
+        new = pycountry.countries.get(alpha_3=geography_iso)
+        if new:
+            return new.name
     except LookupError:
         # Find the corresponding row based on geography_iso in the alpha-3 column
         iso_row = iso_df[iso_df['alpha-3'] == geography_iso]
@@ -43,6 +46,7 @@ def update_geography(document_j):
             new_geography = iso_row.iloc[0]['name']
 
     return new_geography
+
 
 def check_document_geography(document_i, document_j):
     full_text_i = " ".join(
