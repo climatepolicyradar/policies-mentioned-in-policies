@@ -3,7 +3,6 @@ import pickle
 import neomodel
 import csv
 import concurrent.futures
-from concurrent.futures import ProcessPoolExecutor
 from src.models import FamilyNode, DocumentNode
 from src.text import check_document_geography
 from cpr_data_access.models import Dataset, CPRDocument
