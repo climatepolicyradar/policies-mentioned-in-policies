@@ -3,9 +3,9 @@ import pickle
 import neomodel
 import csv
 import concurrent.futures
-from multiprocessing import Manager
+from concurrent.futures import ProcessPoolExecutor
 from src.models import FamilyNode, DocumentNode
-from src.text import normalise_text, check_document_geography
+from src.text import check_document_geography
 from cpr_data_access.models import Dataset, CPRDocument
 from src.neo4j import wait_for_neo4j, clear_neo4j
 from rich.console import Console
@@ -22,7 +22,6 @@ console = Console(
 neomodel.db.set_connection("bolt://neo4j:password@localhost:7689")
 wait_for_neo4j()
 clear_neo4j()
-
 
 # load the dataset from disk if it exists, otherwise download it from huggingface
 dataset_path = Path("data/dataset.pkl")
@@ -74,8 +73,8 @@ linking_progress_bar = track(
     transient=True,
 )
 
-def process_document(document_i, dataset, progress_list):
-    mentions = []
+def process_document(document_i, dataset):
+    mentions_document = set()
 
     for document_j in dataset:
         if document_i.document_id == document_j.document_id:
@@ -84,63 +83,69 @@ def process_document(document_i, dataset, progress_list):
         if document_j.document_metadata.publication_ts < document_i.document_metadata.publication_ts:
             exists, found_block = check_document_geography(document_i, document_j)
 
-            if exists and (document_i.document_name, document_j.document_name, found_block) not in mentions:
-                node_i = DocumentNode.nodes.get(document_id=document_i.document_id)
-                node_j = DocumentNode.nodes.get(document_id=document_j.document_id)
-                node_i.mentions.connect(node_j)
+            if exists:
+                key = (document_i.document_id, document_j.document_id, document_j.document_name, found_block)
+                if key not in mentions_document:
+                    if document_j.document_metadata.geography_iso != document_i.document_metadata.geography_iso:
+                        console.print(
+                            f"\n Found mention of [bold magenta]{document_j.document_name}[/bold magenta] "
+                            f" {document_j.document_metadata} {document_j.translated} "
+                            f"in [bold blue]{document_i.document_name}[/bold blue]"
+                            f" {document_i.document_metadata.geography} {document_i.translated}",
+                            end="\n",
+                        )
+                    mentions_document.add(key)
 
-                if document_j.document_metadata.geography_iso != document_i.document_metadata.geography_iso:
-                    console.print(
-                        f"\n Found mention of [bold magenta]{document_j.document_name}[/bold magenta] "
-                        f" {document_j.document_metadata} {document_j.translated} "
-                        f"in [bold blue]{document_i.document_name}[/bold blue]"
-                        f" {document_i.document_metadata.geography} {document_i.translated}",
-                        end="\n",
-                    )
-                mentions.append((document_i.document_name, document_j.document_name, found_block))
-    # Update progress
-    progress_list.append(1)
-    console.print(f"Document {document_i.document_name} mentions: {len(mentions)}")
+    return list(mentions_document)
 
-    return mentions
+def process_documents_batch(batch):
+    results = []
+    for document_i in batch:
+        mentions_document = process_document(document_i, dataset)
+        if mentions_document:
+            results.extend(mentions_document)
+    return results
 
-def parallel_process_documents(dataset):
+def parallel_process_documents(dataset, batch_size=10):
     mentions = []
-    if __name__ == '__main__':
-        with Manager() as manager:
-            progress_list = manager.list()
 
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                # Process documents in parallel
-                futures = [executor.submit(process_document, document_i, dataset, progress_list) for document_i in linking_progress_bar]
-                # Wait for all threads to finish
-                concurrent.futures.wait(futures)
+    if __name__ == "__main__":
 
-            # Combine the results from all processed documents
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            # Process documents in parallel
+            batches = [dataset[i:i + batch_size] for i in range(0, len(dataset), batch_size)]
+            futures = [executor.submit(process_documents_batch, batch) for batch in batches]
+
+            # Wait for all threads to finish
+            concurrent.futures.wait(futures)
+
+        # Combine the results from all processed documents
             for future in concurrent.futures.as_completed(futures):
-                mentions.extend(future.result())
+                if future.result():
+                    mentions.extend(future.result())
 
-    return mentions
+    for id_i, id_j, name_j, found_block in mentions:
+        node_i = DocumentNode.nodes.get(document_id=id_i)
+        node_j = DocumentNode.nodes.get(document_id=id_j)
+        node_i.mentions.connect(node_j)
 
-# Call the parallel processing function
-mentions = parallel_process_documents(dataset)
+    for id_i, id_j, title, found_block in mentions:
+        console.print(
+            f"Found mention of [bold magenta]{title}[/bold magenta] "
+            f"in [bold blue]{id_i}[/bold blue]",
+            end="\n",
+        )
 
-console.print(len(mentions))
-for found_in_title, title, found_block in mentions:
-    console.print(
-        f"Found mention of [bold magenta]{title}[/bold magenta] "
-        f"in [bold blue]{found_in_title}[/bold blue]",
-        end="\n",
-    )
+    # Specify the file name
+    csv_file = 'output.csv'
 
-# Specify the file name
-csv_file = 'output.csv'
+    # Write the list of tuples to a CSV file
+    with open(csv_file, 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerows(mentions)
 
-# Write the list of tuples to a CSV file
-with open(csv_file, 'w', newline='') as file:
-    writer = csv.writer(file)
-    writer.writerows(mentions)
-
+# Process documents in parallel and save results
+parallel_process_documents(dataset)
 
 console.print(
     "✔️ Connected all documents which mention each other!", style="bold green"
