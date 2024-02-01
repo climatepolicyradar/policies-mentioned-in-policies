@@ -1,8 +1,9 @@
 from pathlib import Path
 import pickle
 import neomodel
-import csv
+import json
 import concurrent.futures
+from collections import defaultdict
 from src.models import FamilyNode, DocumentNode
 from src.text import check_document_geography
 from cpr_data_access.models import Dataset, CPRDocument
@@ -18,7 +19,7 @@ console = Console(
 )
 
 # set up a connection to the neo4j database and clear whatever is there
-neomodel.db.set_connection("bolt://neo4j:password@localhost:7689")
+neomodel.db.set_connection("bolt://neo4j:password@localhost:7687")
 wait_for_neo4j()
 clear_neo4j()
 
@@ -39,7 +40,7 @@ else:
 
 console.print("✔️ Loaded dataset!", style="bold green")
 
-#dataset = dataset[:200]
+dataset = dataset[:200]
 
 # create the nodes for the families and documents
 node_creation_progress_bar = track(
@@ -80,9 +81,9 @@ def process_document(document_i, dataset):
             continue
 
         if document_j.document_metadata.publication_ts < document_i.document_metadata.publication_ts:
-            exists, found_block = check_document_geography(document_i, document_j)
+            found_block = check_document_geography(document_i, document_j)
 
-            if exists:
+            if found_block:
                 key = (document_i.document_id, document_j.document_id, document_j.document_name, found_block)
                 if key not in mentions_document:
                     if document_j.document_metadata.geography_iso != document_i.document_metadata.geography_iso:
@@ -94,6 +95,11 @@ def process_document(document_i, dataset):
                             end="\n",
                         )
                     mentions_document.add(key)
+                    console.print(
+                        f"Found mention of [bold magenta]{document_j.document_name}[/bold magenta] "
+                        f"in [bold blue]{document_i.document_id}[/bold blue]",
+                        end="\n",
+                    )
 
     return list(mentions_document)
 
@@ -105,46 +111,44 @@ def process_documents_batch(batch):
             results.extend(mentions_document)
     return results
 
-def parallel_process_documents(dataset, batch_size=10):
-    mentions = []
 
-    if __name__ == "__main__":
+mentions = []
+batch_size = 10
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            # Process documents in parallel
-            batches = [dataset[i:i + batch_size] for i in range(0, len(dataset), batch_size)]
-            futures = [executor.submit(process_documents_batch, batch) for batch in batches]
+if __name__ == "__main__":
 
-            # Wait for all threads to finish
-            concurrent.futures.wait(futures)
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        # Process documents in parallel
+        batches = [dataset[i:i + batch_size] for i in range(0, len(dataset), batch_size)]
+        futures = [executor.submit(process_documents_batch, batch) for batch in batches]
 
-        # Combine the results from all processed documents
-            for future in concurrent.futures.as_completed(futures):
-                if future.result():
-                    mentions.extend(future.result())
+        # Wait for all threads to finish
+        concurrent.futures.wait(futures)
 
-    for id_i, id_j, name_j, found_block in mentions:
-        node_i = DocumentNode.nodes.get(document_id=id_i)
-        node_j = DocumentNode.nodes.get(document_id=id_j)
-        node_i.mentions.connect(node_j)
+    # Combine the results from all processed documents
+        for future in concurrent.futures.as_completed(futures):
+            if future.result():
+                mentions.extend(future.result())
 
-    for id_i, id_j, title, found_block in mentions:
-        console.print(
-            f"Found mention of [bold magenta]{title}[/bold magenta] "
-            f"in [bold blue]{id_i}[/bold blue]",
-            end="\n",
-        )
+for id_i, id_j, name_j, found_block in mentions:
+    node_i = DocumentNode.nodes.get(document_id=id_i)
+    node_j = DocumentNode.nodes.get(document_id=id_j)
+    node_i.mentions.connect(node_j)
 
-    # Specify the file name
-    csv_file = 'output.csv'
+# Organize mentions into a well-structured dictionary
+structured_mentions = defaultdict(list)
 
-    # Write the list of tuples to a CSV file
-    with open(csv_file, 'w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerows(mentions)
+for id_i, id_j, name_j, found_block in mentions:
+    structured_mentions['mentions'].append({
+        'document_id_i': id_i,
+        'document_id_j': id_j,
+        'document_name_j': name_j,
+        'found_block': found_block
+    })
 
-# Process documents in parallel and save results
-parallel_process_documents(dataset)
+# Save structured_mentions as a JSON file
+with open('mentions.json', 'w') as json_file:
+    json.dump(structured_mentions, json_file, indent=2)
 
 console.print(
     "✔️ Connected all documents which mention each other!", style="bold green"
