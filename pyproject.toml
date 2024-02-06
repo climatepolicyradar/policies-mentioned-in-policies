@@ -13,6 +13,7 @@ httpx = "^0.25.0"
 pydantic = "^2.3.0"
 rich = "^13.5.3"
 cpr_data_access = {git = "https://github.com/climatepolicyradar/data-access.git", tag = "0.3.0"}
+pycountry = "^23.12.11"
 
 [build-system]
 requires = ["poetry-core"]

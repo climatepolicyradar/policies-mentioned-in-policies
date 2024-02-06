@@ -1,10 +1,10 @@
 from pathlib import Path
 import pickle
 import neomodel
-import csv
+import json
 from collections import defaultdict
 from src.models import FamilyNode, DocumentNode
-from src.text import normalise_text, check_document_geography
+from src.text import check_document_geography
 from cpr_data_access.models import Dataset, CPRDocument
 from src.neo4j import wait_for_neo4j, clear_neo4j
 from rich.console import Console
@@ -18,10 +18,9 @@ console = Console(
 )
 
 # set up a connection to the neo4j database and clear whatever is there
-neomodel.db.set_connection("bolt://neo4j:password@localhost:7689")
+neomodel.db.set_connection("bolt://neo4j:password@localhost:7687")
 wait_for_neo4j()
 clear_neo4j()
-
 
 # load the dataset from disk if it exists, otherwise download it from huggingface
 dataset_path = Path("data/dataset.pkl")
@@ -40,7 +39,7 @@ else:
 
 console.print("✔️ Loaded dataset!", style="bold green")
 
-#dataset = dataset[:200]
+dataset = dataset[:200]
 
 # create the nodes for the families and documents
 node_creation_progress_bar = track(

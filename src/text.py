@@ -1,11 +1,11 @@
 import re
 import pycountry
 import pandas as pd
+from typing import Optional
 
 csv_url = "https://github.com/lukes/ISO-3166-Countries-with-Regional-Codes/raw/master/all/all.csv"
 iso_df = pd.read_csv(csv_url)
 iso_data = dict(zip(iso_df['alpha-3'], iso_df['name']))
-
 
 def normalise_text(input_string: str) -> str:
     # remove newlines and multiple spaces
@@ -20,7 +20,6 @@ def normalise_text(input_string: str) -> str:
 
 
 def find_title_and_geography(text_blocks, title, geography) -> Optional[str]:
-
     # Normalize title and geography outside the loop
     norm_title = normalise_text(title)
     norm_geography = normalise_text(geography)
@@ -34,7 +33,6 @@ def find_title_and_geography(text_blocks, title, geography) -> Optional[str]:
     return None
 
 def update_geography(document_j):
-    new_geography = "nan"
     geography_iso = document_j.document_metadata.geography_iso
     if geography_iso == "EUR":
         geography_iso = "EUU"
@@ -44,14 +42,13 @@ def update_geography(document_j):
         new_geography = iso_data.get(geography_iso)
     return new_geography
 
-
 def check_document_geography(document_i, document_j):
-    full_text_i = " ".join(
-        [passage for block in document_i.text_blocks for passage in block.text]
-    )
-    full_text_i = normalise_text(full_text_i)
     title_j = normalise_text(document_j.document_name)
     text_blocks = [passage for block in document_i.text_blocks for passage in block.text]
+
+    # Rename empty values to None
+    if document_j.document_metadata.geography == "nan":
+        document_j.document_metadata.geography = None
 
     # If the mention document and the document have the same geography, high likelihood of real mention
     if document_i.document_metadata.geography_iso == document_j.document_metadata.geography_iso:
@@ -62,7 +59,7 @@ def check_document_geography(document_i, document_j):
         return None
 
         # Check if the geography of the document is also mentioned in the text
-        if document_j.document_metadata.geography == "nan":
+        if not document_j.document_metadata.geography:
             # Try to grab missing geography name with ISO code
             new_geography = update_geography(document_j)
             document_j.document_metadata.geography = new_geography
@@ -74,4 +71,4 @@ def check_document_geography(document_i, document_j):
                 if title_j in normalise_text(passage):
                     return passage
 
-    return False, ""
+    return None
