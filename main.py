@@ -2,6 +2,7 @@ from pathlib import Path
 import pickle
 import neomodel
 import csv
+from collections import defaultdict
 from src.models import FamilyNode, DocumentNode
 from src.text import normalise_text, check_document_geography
 from cpr_data_access.models import Dataset, CPRDocument
@@ -72,46 +73,53 @@ linking_progress_bar = track(
     transient=True,
 )
 
-mentions = []
+mentions_document = set()
+
 for document_i in linking_progress_bar:
     for document_j in dataset:
         if document_i.document_id == document_j.document_id:
             continue
-        exists, found_block = check_document_geography(document_i, document_j)
-        if (exists
-                # Check if mentioned document was published before the document it is mentioned in
-                and (document_j.document_metadata.publication_ts < document_i.document_metadata.publication_ts)
-                # Only show unique mentions
-                and (document_i.document_name, document_j.document_name, found_block) not in mentions):
-            node_i = DocumentNode.nodes.get(document_id=document_i.document_id)
-            node_j = DocumentNode.nodes.get(document_id=document_j.document_id)
-            node_i.mentions.connect(node_j)
-            if document_j.document_metadata.geography_iso is not document_i.document_metadata.geography_iso:
-                console.print(
-                    f"\n Found mention of [bold magenta]{document_j.document_name}[/bold magenta] "
-                    f" {document_j.document_metadata} {document_j.translated} "
-                    f"in [bold blue]{document_i.document_name}[/bold blue]"
-                    f" {document_i.document_metadata.geography} {document_i.translated}",
-                    end="\n",
-                )
-            mentions.append((document_i.document_name, document_j.document_name, found_block))
+        found_block = check_document_geography(document_i, document_j)
+        if found_block:
+            key = (document_i.document_id, document_j.document_id, document_j.document_name, found_block)
+            if key not in mentions_document:
+                if document_j.document_metadata.geography_iso != document_i.document_metadata.geography_iso:
+                    console.print(
+                        f"\n Found mention of [bold magenta]{document_j.document_name}[/bold magenta] "
+                        f" {document_j.document_metadata} {document_j.translated} "
+                        f"in [bold blue]{document_i.document_name}[/bold blue]"
+                        f" {document_i.document_metadata.geography} {document_i.translated}",
+                        end="\n",
+                    )
+                mentions_document.add(key)
+                #console.print(
+                #    f"Found mention of [bold magenta]{document_j.document_name}[/bold magenta] "
+                #    f"in [bold blue]{document_i.document_id}[/bold blue]",
+                #    end="\n",
+                #)
 
-console.print(len(mentions))
-for found_in_title, title, found_block in mentions:
-    console.print(
-        f"Found mention of [bold magenta]{title}[/bold magenta] "
-        f"in [bold blue]{found_in_title}[/bold blue]",
-        end="\n",
-    )
 
-# Specify the file name
-csv_file = 'output.csv'
+mentions = list(mentions_document)
 
-# Write the list of tuples to a CSV file
-with open(csv_file, 'w', newline='') as file:
-    writer = csv.writer(file)
-    writer.writerows(mentions)
+for id_i, id_j, name_j, found_block in mentions:
+    node_i = DocumentNode.nodes.get(document_id=id_i)
+    node_j = DocumentNode.nodes.get(document_id=id_j)
+    node_i.mentions.connect(node_j)
 
+# Organize mentions into a well-structured dictionary
+structured_mentions = defaultdict(list)
+
+for id_i, id_j, name_j, found_block in mentions:
+    structured_mentions['mentions'].append({
+        'document_id_i': id_i,
+        'document_id_j': id_j,
+        'document_name_j': name_j,
+        'found_block': found_block
+    })
+
+# Save structured_mentions as a JSON file
+with open('mentions.json', 'w') as json_file:
+    json.dump(structured_mentions, json_file, indent=2)
 
 console.print(
     "✔️ Connected all documents which mention each other!", style="bold green"

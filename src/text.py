@@ -4,6 +4,7 @@ import pandas as pd
 
 csv_url = "https://github.com/lukes/ISO-3166-Countries-with-Regional-Codes/raw/master/all/all.csv"
 iso_df = pd.read_csv(csv_url)
+iso_data = dict(zip(iso_df['alpha-3'], iso_df['name']))
 
 
 def normalise_text(input_string: str) -> str:
@@ -18,15 +19,19 @@ def normalise_text(input_string: str) -> str:
     return clean_string
 
 
-def find_title_and_geography(text_blocks, title, geography):
-    for i, text in enumerate(text_blocks):
-        if title in text:
-            # Check if geography is in the current text block or the surrounding 3 text blocks
-            for j in range(max(0, i - 3), min(len(text_blocks), i + 4)):
-                if geography in text_blocks[j]:
-                    return True, text_blocks[j]
-    return False, ""
+def find_title_and_geography(text_blocks, title, geography) -> Optional[str]:
 
+    # Normalize title and geography outside the loop
+    norm_title = normalise_text(title)
+    norm_geography = normalise_text(geography)
+
+    for i, text in enumerate(text_blocks):
+        if norm_title in normalise_text(text):
+            # Check if geography is in the current text block or the surrounding 2 text blocks
+            for j in range(max(0, i - 2), min(len(text_blocks), i + 2)):
+                if norm_geography in text_blocks[j]:
+                    return text
+    return None
 
 def update_geography(document_j):
     new_geography = "nan"
@@ -34,17 +39,9 @@ def update_geography(document_j):
     if geography_iso == "EUR":
         geography_iso = "EUU"
     try:
-        new = pycountry.countries.get(alpha_3=geography_iso)
-        if new:
-            return new.name
+        new_geography = pycountry.countries.get(alpha_3=geography_iso).name
     except LookupError:
-        # Find the corresponding row based on geography_iso in the alpha-3 column
-        iso_row = iso_df[iso_df['alpha-3'] == geography_iso]
-
-        if not iso_row.empty:
-            # Grab the value from the "name" column
-            new_geography = iso_row.iloc[0]['name']
-
+        new_geography = iso_data.get(geography_iso)
     return new_geography
 
 
@@ -54,29 +51,27 @@ def check_document_geography(document_i, document_j):
     )
     full_text_i = normalise_text(full_text_i)
     title_j = normalise_text(document_j.document_name)
+    text_blocks = [passage for block in document_i.text_blocks for passage in block.text]
 
     # If the mention document and the document have the same geography, high likelihood of real mention
     if document_i.document_metadata.geography_iso == document_j.document_metadata.geography_iso:
-        for block in document_i.text_blocks:
-            for passage in block.text:
-                text_i = normalise_text(passage).lower()
-                if title_j.lower() in text_i:
-                    return True, text_i
+        for passage in text_blocks:
+            if title_j.lower() in normalise_text(passage).lower():
+                return passage
     else:
+        return None
+
         # Check if the geography of the document is also mentioned in the text
         if document_j.document_metadata.geography == "nan":
             # Try to grab missing geography name with ISO code
             new_geography = update_geography(document_j)
             document_j.document_metadata.geography = new_geography
 
-        if document_j.document_metadata.geography != "nan":
-            text_blocks = [passage for block in document_i.text_blocks for passage in block.text]
+        if document_j.document_metadata.geography:
             return find_title_and_geography(text_blocks, title_j, document_j.document_metadata.geography)
         else:
-            for block in document_i.text_blocks:
-                for passage in block.text:
-                    text_i = normalise_text(passage)
-                    if title_j in text_i:
-                        return True, text_i
+            for passage in text_blocks:
+                if title_j in normalise_text(passage):
+                    return passage
 
     return False, ""
