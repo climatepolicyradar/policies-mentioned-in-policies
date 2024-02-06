@@ -78,6 +78,8 @@ for document_i in linking_progress_bar:
     for document_j in dataset:
         if document_i.document_id == document_j.document_id:
             continue
+        if document_j.document_metadata.publication_ts < document_i.document_metadata.publication_ts:
+            continue
         found_block = check_document_geography(document_i, document_j)
         if found_block:
             key = (document_i.document_id, document_j.document_id, document_j.document_name, found_block)
