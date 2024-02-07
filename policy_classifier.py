@@ -5,7 +5,7 @@ from spacy.training.example import Example
 from spacy.matcher import Matcher, PhraseMatcher
 from src.text import normalise_text
 from spacy.language import Language
-
+from spacy.tokens import Span
 
 policy_keywords = ['accord', 'act', 'action', 'constitution',
                    'decision', 'decree', 'order', 'ordinance', 'directive',
@@ -13,8 +13,9 @@ policy_keywords = ['accord', 'act', 'action', 'constitution',
                    'resolution', 'agenda', 'strategy', 'guideline', 'code', 'rule', 'procedure',
                    'protocol', 'standard', 'principle', 'requirement']
 
-# Load a blank English model
+
 nlp = spacy.load("en_core_web_sm")
+
 # Define the pattern to match phrases with at least two words where each word starts with an uppercase letter
 pattern = [{"IS_TITLE": True, "OP": "+"}]
 
@@ -39,19 +40,22 @@ def match_policy_keywords(doc):
 
     # Process matches from the PhraseMatcher
     for match_id, start, end in phrase_matches:
-        span = doc[start:end]
-        entities.append((span.start_char, span.end_char, "POLICY"))
+        span = Span(doc, start, end, label="POLICY")
+        if not any(span.start >= ent.start and span.end <= ent.end for ent in entities):
+            entities.append(span)
 
     # Process matches from the Matcher
     for match_id, start, end in matcher_matches:
-        span = doc[start:end]
-        entities.append((span.start_char, span.end_char, "POLICY"))
+        span = Span(doc, start, end, label="POLICY")
+        # Check if the span overlaps with any existing entity
+        if not any(span.start >= ent.start and span.end <= ent.end for ent in entities):
+            entities.append(span)
 
     # Set entities on the Doc
     doc.ents = entities
     return doc
 
-nlp.add_pipe("match_policy_keywords", last=True)
+#nlp.add_pipe("match_policy_keywords", last=True)
 
 # Path to your JSON file
 json_file_path = "mentions.json"
@@ -114,16 +118,29 @@ total_entities = 0
 for text, annotations in test_data:
     doc = trained_nlp(text)
 
+    # Apply Matcher
+    title_matches = matcher(doc)
+
+    # Apply PhraseMatcher
+    keyword_matches = phrase_matcher(doc)
+
     # Extract the predicted entities
     predicted_entities = [(ent.start_char, ent.end_char, ent.label_) for ent in doc.ents]
 
     # Extract the ground truth entities
     ground_truth_entities = annotations['entities']
 
+    # Filter predicted entities based on Matcher and PhraseMatcher matches
+    filtered_entities = predicted_entities
+    #for start, end, label in predicted_entities:
+    #    if any(start <= match[1] <= end for match in title_matches):
+    #        if any(start <= match[1] <= end for match in keyword_matches):
+    #            filtered_entities.append((start, end, label))
+
     # Calculate metrics
-    correct_entities = set(predicted_entities) & set(ground_truth_entities)
+    correct_entities = set(filtered_entities) & set(ground_truth_entities)
     total_correct += len(correct_entities)
-    total_predicted += len(predicted_entities)
+    total_predicted += len(filtered_entities)
     total_entities += len(ground_truth_entities)
 
 # Calculate precision, recall, and F1 score
