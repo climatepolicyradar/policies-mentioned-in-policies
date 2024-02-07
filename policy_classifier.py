@@ -1,4 +1,3 @@
-# Define the NER model and train it
 import spacy
 import json
 import random
@@ -9,27 +8,9 @@ from src.text import normalise_text
 from spacy.language import Language
 from spacy.tokens import Span
 
-policy_keywords = ['accord', 'act', 'action', 'constitution',
-                   'decision', 'decree', 'order', 'ordinance', 'directive',
-                   'framework', 'law', 'plan', 'policy', 'programme', 'regulation',
-                   'resolution', 'agenda', 'strategy', 'guideline', 'code', 'rule', 'procedure',
-                   'protocol', 'standard', 'principle', 'requirement']
-
-nlp = spacy.load("en_core_web_sm")
-
-# Initialize PhraseMatcher
-phrase_matcher = PhraseMatcher(nlp.vocab)
-
-# Convert policy keywords to Doc objects for PhraseMatcher
-policy_keyword_docs = [nlp(keyword.lower()) for keyword in policy_keywords]
-
-# Add policy keyword patterns to PhraseMatcher
-phrase_matcher.add("POLICY_KEYWORDS", None, *policy_keyword_docs)
-
 @Language.component("match_policy_keywords")
 def match_policy_keywords(doc):
     phrase_matches = phrase_matcher(doc)
-    matcher_matches = matcher(doc)
     entities = []
 
     # Process matches from the PhraseMatcher
@@ -42,16 +23,24 @@ def match_policy_keywords(doc):
     doc.ents = entities
     return doc
 
-nlp.add_pipe("match_policy_keywords", last=True)
+def add_policy_matcher(nlp):
+    policy_keywords = ['accord', 'act', 'action', 'constitution',
+                       'decision', 'decree', 'order', 'ordinance', 'directive',
+                       'framework', 'law', 'plan', 'policy', 'programme', 'regulation',
+                       'resolution', 'agenda', 'strategy', 'guideline', 'code', 'rule', 'procedure',
+                       'protocol', 'standard', 'principle', 'requirement']
 
-# Path to your JSON file
-json_file_path = "mentions.json"
+    # Initialize PhraseMatcher
+    phrase_matcher = PhraseMatcher(nlp.vocab)
 
-# Read JSON data from the file
-with open(json_file_path, "r") as json_file:
-    training_data = json.load(json_file)
+    # Convert policy keywords to Doc objects for PhraseMatcher
+    policy_keyword_docs = [nlp(keyword.lower()) for keyword in policy_keywords]
 
-# Function to generate training data
+    # Add policy keyword patterns to PhraseMatcher
+    phrase_matcher.add("POLICY_KEYWORDS", None, *policy_keyword_docs)
+
+    return phrase_matcher
+
 def create_training_data(data):
     training_data = []
 
@@ -75,122 +64,104 @@ def create_training_data(data):
 
     return training_data
 
-# Create training data
-all_data = create_training_data(training_data["mentions"])
+def get_data():
+    # Path to your JSON file
+    json_file_path = "mentions.json"
 
-# Shuffle the data to ensure randomness
-random.shuffle(all_data)
+    # Read JSON data from the file
+    with open(json_file_path, "r") as json_file:
+        training_data = json.load(json_file)
 
-# Define the ratios for train, validation, and test sets
-train_ratio = 0.8
-val_ratio = 0.1
-test_ratio = 0.1
+    # Create training data
+    all_data = create_training_data(training_data["mentions"])
 
-# Calculate the sizes of each set
-total_samples = len(all_data)
-train_size = int(total_samples * train_ratio)
-val_size = int(total_samples * val_ratio)
-test_size = total_samples - train_size - val_size
+    return all_data
 
-# Split the data into training, validation, and test sets
+def train_model(train_data):
+    nlp = spacy.load("en_core_web_sm")
+
+    #phrase_matcher = add_policy_matcher(nlp)
+    #nlp.add_pipe("match_policy_keywords", last=True)
+
+    # Train for a few epochs
+    for epoch in range(10):
+        for text, annotations in train_data:
+            example = Example.from_dict(nlp.make_doc(text), annotations)
+            nlp.update([example], drop=0.5)
+
+    # Save the trained model
+    nlp.to_disk("policy_ner_model")
+
+def test_model(trained_nlp, stage, test_data):
+
+    total_correct = 0
+    total_predicted = 0
+    total_entities = 0
+
+    for text, annotations in test_data:
+        doc = trained_nlp(text)
+
+        # Check for misaligned entities ('-')
+        bilou_tags = offsets_to_biluo_tags(doc, annotations.get("entities", []))
+        if '-' in bilou_tags:
+            print("Misaligned entities in text:", text)
+            print("Entities:", entities)
+            print("BILOU tags:", bilou_tags)
+
+        # Extract the predicted entities
+        predicted_entities = {(ent.start_char, ent.end_char) for ent in doc.ents}
+
+        # Extract the ground truth entities
+        ground_truth_entities = {(start, end) for start, end, _ in annotations['entities']}
+
+        #print("Found Blocks:")
+        #print(text)
+        #print("Predicted Entities:")
+        #for entity in predicted_entities:
+        #    print(text[entity[0]:entity[1]])
+        #print("Ground Truth Entities:")
+        #for entity in ground_truth_entities:
+        #    print(text[entity[0]:entity[1]])
+        #print("=" * 50)
+
+        # Calculate metrics
+        correct_entities = 0
+        for ground_truth_entity in ground_truth_entities:
+            for predicted_entity in predicted_entities:
+                if set(range(ground_truth_entity[0], ground_truth_entity[1])).issubset(
+                        set(range(predicted_entity[0], predicted_entity[1]))):
+                    correct_entities += 1
+                    break  # Stop searching for this ground truth entity once it's found in a predicted entity
+
+        total_correct += correct_entities
+        total_predicted += len(predicted_entities)
+        total_entities += len(ground_truth_entities)
+
+    # Calculate precision, recall, and F1 score
+    precision = total_correct / total_predicted if total_predicted > 0 else 0
+    recall = total_correct / total_entities if total_entities > 0 else 0
+    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+
+    print(stage, " Precision:", precision)
+    print(stage, " Recall:", recall)
+    print(stage, " F1 Score:", f1_score)
+
+
+all_data = get_data()
+
+train_ratio = .8
+train_size = int(len(all_data) * train_ratio)
 train_data = all_data[:train_size]
-val_data = all_data[train_size:train_size + val_size]
-test_data = all_data[train_size + val_size:]
-
-# Train for a few epochs (increase if necessary)
-for epoch in range(10):
-    for text, annotations in train_data:
-        example = Example.from_dict(nlp.make_doc(text), annotations)
-        nlp.update([example], drop=0.5)  # Adjust the dropout rate as needed
-
-# Save the trained model
-nlp.to_disk("policy_ner_model")
+# train_model(train_data)
 
 # Load the trained model
 trained_nlp = spacy.load("policy_ner_model")
 
-# Evaluate the model on the validation data
-total_correct = 0
-total_predicted = 0
-total_entities = 0
+val_ratio = 0.1
+val_size = int(len(all_data) * val_ratio)
+val_data = all_data[train_size:train_size + val_size]
 
-for text, annotations in val_data:
-    doc = trained_nlp(text)
+test_model(trained_nlp, "validation", val_data)
 
-    # Extract the predicted entities
-    predicted_entities = [(ent.start_char, ent.end_char, ent.label_) for ent in doc.ents]
-
-    # Extract the ground truth entities
-    ground_truth_entities = annotations['entities']
-
-    # Calculate metrics
-    correct_entities = set(predicted_entities) & set(ground_truth_entities)
-    total_correct += len(correct_entities)
-    total_predicted += len(predicted_entities)
-    total_entities += len(ground_truth_entities)
-
-# Calculate precision, recall, and F1 score
-precision = total_correct / total_predicted if total_predicted > 0 else 0
-recall = total_correct / total_entities if total_entities > 0 else 0
-f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-
-print("Validation Precision:", precision)
-print("Validation Recall:", recall)
-print("Validation F1 Score:", f1_score)
-
-# Evaluate the model on the test data
-total_correct = 0
-total_predicted = 0
-total_entities = 0
-
-for text, annotations in test_data:
-    doc = trained_nlp(text)
-
-    # Apply Matcher
-    title_matches = matcher(doc)
-
-    # Apply PhraseMatcher
-    keyword_matches = phrase_matcher(doc)
-    entities = annotations.get("entities", [])
-    bilou_tags = offsets_to_biluo_tags(doc, entities)
-    # Check for misaligned entities ('-')
-    if '-' in bilou_tags:
-        print("Misaligned entities in text:", text)
-        print("Entities:", entities)
-        print("BILOU tags:", bilou_tags)
-
-    # Extract the predicted entities and BILOU tags
-    predicted_entities = {(ent.start_char, ent.end_char) for ent in doc.ents}
-
-    # Extract the ground truth entities
-    ground_truth_entities = {(start, end) for start, end, _ in annotations['entities']}
-
-    #for start, end, label in predicted_entities:
-    #    if any(start <= match[1] <= end for match in title_matches):
-    #        if any(start <= match[1] <= end for match in keyword_matches):
-    #            filtered_entities.append((start, end, label))
-
-    #print("Found Blocks:")
-    #print(text)
-    #print("Predicted Entities:")
-    #for entity in predicted_entities:
-    #    print(text[entity[0]:entity[1]])
-    #print("Ground Truth Entities:")
-    #for entity in ground_truth_entities:
-    #    print(text[entity[0]:entity[1]])
-    #print("=" * 50)
-
-    # Calculate metrics
-    correct_entities = predicted_entities & ground_truth_entities
-    total_correct += len(correct_entities)
-    total_predicted += len(predicted_entities)
-    total_entities += len(ground_truth_entities)
-
-# Calculate precision, recall, and F1 score
-precision = total_correct / total_predicted if total_predicted > 0 else 0
-recall = total_correct / total_entities if total_entities > 0 else 0
-f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-
-print("Precision:", precision)
-print("Recall:", recall)
-print("F1 Score:", f1_score)
+test_data = all_data[int(len(all_data) * (train_ratio + val_ratio)):]
+test_model(trained_nlp, "test", test_data)
