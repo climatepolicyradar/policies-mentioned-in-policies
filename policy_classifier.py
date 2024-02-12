@@ -1,6 +1,8 @@
 import spacy
 import json
 import random
+from main import load_dataset
+from fuzzywuzzy import fuzz
 from spacy.training import offsets_to_biluo_tags
 from spacy.training.example import Example
 from spacy.matcher import Matcher, PhraseMatcher
@@ -98,6 +100,8 @@ def test_model(trained_nlp, stage, test_data):
     total_predicted = 0
     total_entities = 0
 
+    predicted_titles = []
+
     for text, annotations in test_data:
         doc = trained_nlp(text)
 
@@ -105,7 +109,6 @@ def test_model(trained_nlp, stage, test_data):
         bilou_tags = offsets_to_biluo_tags(doc, annotations.get("entities", []))
         if '-' in bilou_tags:
             print("Misaligned entities in text:", text)
-            print("Entities:", entities)
             print("BILOU tags:", bilou_tags)
 
         # Extract the predicted entities
@@ -113,6 +116,9 @@ def test_model(trained_nlp, stage, test_data):
 
         # Extract the ground truth entities
         ground_truth_entities = {(start, end) for start, end, _ in annotations['entities']}
+
+        for entity in predicted_entities:
+            predicted_titles.append(text[entity[0]:entity[1]])
 
         #print("Found Blocks:")
         #print(text)
@@ -137,6 +143,7 @@ def test_model(trained_nlp, stage, test_data):
         total_predicted += len(predicted_entities)
         total_entities += len(ground_truth_entities)
 
+    print(total_predicted)
     # Calculate precision, recall, and F1 score
     precision = total_correct / total_predicted if total_predicted > 0 else 0
     recall = total_correct / total_entities if total_entities > 0 else 0
@@ -145,6 +152,24 @@ def test_model(trained_nlp, stage, test_data):
     print(stage, " Precision:", precision)
     print(stage, " Recall:", recall)
     print(stage, " F1 Score:", f1_score)
+
+    return predicted_titles
+
+def fuzzy_match_titles(model_titles, database_titles, threshold=70):
+    matched_titles = {}
+
+    for model_title in model_titles:
+        potential_matches = []
+
+        for database_title in database_titles:
+            score = fuzz.ratio(model_title.lower(), database_title.lower())
+            if score >= threshold:
+                potential_matches.append((database_title, score))
+
+        if potential_matches:
+            matched_titles[model_title] = potential_matches
+
+    return matched_titles
 
 
 all_data = get_data()
@@ -161,7 +186,17 @@ val_ratio = 0.1
 val_size = int(len(all_data) * val_ratio)
 val_data = all_data[train_size:train_size + val_size]
 
-test_model(trained_nlp, "validation", val_data)
+print(len(all_data))
+val_titles = test_model(trained_nlp, "validation", val_data)
 
 test_data = all_data[int(len(all_data) * (train_ratio + val_ratio)):]
-test_model(trained_nlp, "test", test_data)
+test_titles = test_model(trained_nlp, "test", test_data)
+
+#dataset = load_dataset()
+#dataset_titles = [document.document_name for document in dataset]
+
+#matched_titles = fuzzy_match_titles(test_titles, dataset_titles)
+#print(matched_titles)
+
+# . For this step there are lots of features to play with - the text context
+# and document metadata for the mention, and the title and document metadata for each KB entry.
