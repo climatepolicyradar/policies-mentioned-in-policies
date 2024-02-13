@@ -32,8 +32,7 @@ def find_title_and_geography(text_blocks, title, geography) -> Optional[str]:
                     return text
     return None
 
-def update_geography(document_j):
-    geography_iso = document_j.document_metadata.geography_iso
+def update_geography(geography_iso):
     if geography_iso == "EUR":
         geography_iso = "EUU"
     try:
@@ -61,7 +60,7 @@ def check_document_geography(document_i, document_j):
         # Check if the geography of the document is also mentioned in the text
         if not document_j.document_metadata.geography:
             # Try to grab missing geography name with ISO code
-            new_geography = update_geography(document_j)
+            new_geography = update_geography(document_j.document_metadata.geography_iso)
             document_j.document_metadata.geography = new_geography
 
         if document_j.document_metadata.geography:

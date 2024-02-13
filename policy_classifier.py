@@ -2,6 +2,7 @@ import spacy
 import json
 import random
 from fuzzywuzzy import fuzz
+from src.text import update_geography
 from spacy.training import offsets_to_biluo_tags
 from spacy.training.example import Example
 from spacy.matcher import Matcher, PhraseMatcher
@@ -106,6 +107,9 @@ def test_model(trained_nlp, stage, test_data):
     total_entities = 0
     predicted_titles = []
 
+    nlp_countries = spacy.load("en_core_web_sm")
+
+    countries_for_titles = {}
     for text, annotations in test_data:
         doc = trained_nlp(text)
 
@@ -121,8 +125,16 @@ def test_model(trained_nlp, stage, test_data):
         # Extract the ground truth entities
         ground_truth_entities = {(start, end) for start, end, _ in annotations['entities']}
 
+        doc = nlp_countries(text)
+        # Extract country names using NER
+        countries = set()
+        for ent in doc.ents:
+            if ent.label_ in ["GPE", "LOC"]:
+                countries.add(ent.text)
+
         for entity in predicted_entities:
             predicted_titles.append(text[entity[0]:entity[1]])
+            countries_for_titles[text[entity[0]:entity[1]]] = countries
 
         #print("Found Blocks:")
         #print(text)
@@ -156,9 +168,9 @@ def test_model(trained_nlp, stage, test_data):
     print(stage, " Recall:", recall)
     print(stage, " F1 Score:", f1_score)
 
-    return predicted_titles
+    return predicted_titles, countries_for_titles
 
-def fuzzy_match_titles(model_titles, database, threshold=90):
+def fuzzy_match_titles(model_titles, database, countries_check, threshold=90):
     matched_titles = {}
 
     easy_match = 0
@@ -171,22 +183,53 @@ def fuzzy_match_titles(model_titles, database, threshold=90):
             score = fuzz.ratio(model_title.lower(), document.document_name.lower())
             if score >= threshold:
                 text_blocks = [passage for block in document.text_blocks for passage in block.text]
-                if (document.document_name, document.document_metadata.geography_iso, document.document_metadata.publication_ts, score) not in potential_matches:
-                    potential_matches.append((document.document_name, document.document_metadata.geography_iso, document.document_metadata.publication_ts, score))
+                if (document.document_name, document.document_metadata.geography_iso, document.document_metadata.geography, document.document_metadata.publication_ts, score) not in potential_matches:
+                    potential_matches.append((document.document_name, document.document_metadata.geography_iso, document.document_metadata.geography, document.document_metadata.publication_ts, score))
 
         if potential_matches:
-            potential_matches.sort(key=lambda x: x[3], reverse=True)
+            potential_matches.sort(key=lambda x: x[4], reverse=True)
             # Keep only the top scoring matches
-            top_score = potential_matches[0][3]
-            top_matches = [match for match in potential_matches if match[3] == top_score]
-            matched_titles[model_title] = top_matches
+            top_score = potential_matches[0][4]
+            top_matches = [match for match in potential_matches if match[4] == top_score]
 
             if len(top_matches) == 1:
                 easy_match += 1
+
             else:
-                print(model_title)
-                print(top_matches)
-                difficult_match += 1
+
+                if countries_check[model_title]:
+                    country_name = list(countries_check[model_title])[0]
+
+                    for match in top_matches:
+                        title_geography = match[2]
+                        if title_geography == "nan":
+                            # Try to grab missing geography name with ISO code
+                            new_geography = update_geography(match[1])
+                            title_geography = new_geography
+
+                        if title_geography == country_name:
+                            top_matches = [match]
+                            break
+
+                filtered_top_matches = []
+                seen_tuples = set()
+
+                for top_match in top_matches:
+                    key = top_match[:2] + top_match[3:]  # Exclude the geography field
+                    if key not in seen_tuples:
+                        filtered_top_matches.append(top_match)
+                        seen_tuples.add(key)
+
+                top_matches = filtered_top_matches
+
+                if len(top_matches) == 1:
+                    easy_match += 1
+                else:
+                    print(model_title)
+                    print(top_matches)
+                    difficult_match += 1
+
+            matched_titles[model_title] = top_matches
 
     return matched_titles, easy_match, difficult_match
 
@@ -204,10 +247,10 @@ val_ratio = 0.1
 val_size = int(len(all_data) * val_ratio)
 val_data = all_data[train_size:train_size + val_size]
 
-val_titles = test_model(trained_nlp, "validation", val_data)
+val_titles, validation_for_titles = test_model(trained_nlp, "validation", val_data)
 
 test_data = all_data[int(len(all_data) * (train_ratio + val_ratio)):]
-test_titles = test_model(trained_nlp, "test", test_data)
+test_titles, test_for_titles = test_model(trained_nlp, "test", test_data)
 
 dataset_path = Path("data/dataset.pkl")
 if dataset_path.exists():
@@ -220,7 +263,7 @@ else:
     with open(dataset_path, "wb") as f:
         pickle.dump(dataset, f)
 
-matched_titles, easy_matches, difficult_matches = fuzzy_match_titles(test_titles, dataset)
+matched_titles, easy_matches, difficult_matches = fuzzy_match_titles(test_titles, dataset, test_for_titles)
 print(len(test_titles))
 print(easy_matches)
 print(difficult_matches)
