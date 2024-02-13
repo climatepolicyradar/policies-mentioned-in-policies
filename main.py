@@ -34,7 +34,6 @@ neomodel.db.set_connection("bolt://neo4j:password@localhost:7687")
 wait_for_neo4j()
 clear_neo4j()
 
-dataset = load_dataset()
 console.print("✔️ Loaded dataset!", style="bold green")
 
 # create the nodes for the families and documents
