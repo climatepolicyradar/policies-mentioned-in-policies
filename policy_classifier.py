@@ -72,7 +72,7 @@ def create_training_data(data):
 
     return training_data
 
-def get_data():
+def get_model_data():
     # Path to your JSON file
     json_file_path = "mentions.json"
 
@@ -136,16 +136,6 @@ def test_model(trained_nlp, stage, test_data):
             predicted_titles.append(text[entity[0]:entity[1]])
             countries_for_titles[text[entity[0]:entity[1]]] = countries
 
-        #print("Found Blocks:")
-        #print(text)
-        #print("Predicted Entities:")
-        #for entity in predicted_entities:
-        #    print(text[entity[0]:entity[1]])
-        #print("Ground Truth Entities:")
-        #for entity in ground_truth_entities:
-        #    print(text[entity[0]:entity[1]])
-        #print("=" * 50)
-
         # Calculate metrics
         correct_entities = 0
         for ground_truth_entity in ground_truth_entities:
@@ -170,22 +160,37 @@ def test_model(trained_nlp, stage, test_data):
 
     return predicted_titles, countries_for_titles
 
+def load_documents():
+    dataset_path = Path("data/dataset.pkl")
+    if dataset_path.exists():
+        with open(dataset_path, "rb") as f:
+            dataset = pickle.load(f)
+    else:
+        dataset = Dataset(
+            CPRDocument, cdn_domain="cdn.climatepolicyradar.org"
+        ).from_huggingface()
+        with open(dataset_path, "wb") as f:
+            pickle.dump(dataset, f)
+    return dataset
+
 def fuzzy_match_titles(model_titles, database, countries_check, threshold=90):
     matched_titles = {}
 
     easy_match = 0
     difficult_match = 0
 
+    # Sort through found titles
     for model_title in model_titles:
         potential_matches = []
 
+        # If matches above 90% in the text block then add it as a potential match
         for document in database:
             score = fuzz.ratio(model_title.lower(), document.document_name.lower())
             if score >= threshold:
-                text_blocks = [passage for block in document.text_blocks for passage in block.text]
                 if (document.document_name, document.document_metadata.geography_iso, document.document_metadata.geography, document.document_metadata.publication_ts, score) not in potential_matches:
                     potential_matches.append((document.document_name, document.document_metadata.geography_iso, document.document_metadata.geography, document.document_metadata.publication_ts, score))
 
+        # Sort matches and grab all the matches with the top score
         if potential_matches:
             potential_matches.sort(key=lambda x: x[4], reverse=True)
             # Keep only the top scoring matches
@@ -194,12 +199,13 @@ def fuzzy_match_titles(model_titles, database, countries_check, threshold=90):
 
             if len(top_matches) == 1:
                 easy_match += 1
-
             else:
-
+                # Attempt to disambiguate
                 if countries_check[model_title]:
+                    # Check if country name is mentioned in the text block
                     country_name = list(countries_check[model_title])[0]
 
+                    # Match country name mentioned to country of document
                     for match in top_matches:
                         title_geography = match[2]
                         if title_geography == "nan":
@@ -211,11 +217,13 @@ def fuzzy_match_titles(model_titles, database, countries_check, threshold=90):
                             top_matches = [match]
                             break
 
+                # Sometimes a country will have a geography iso, but not a name
+                # So here, filter out duplicates, irrespective of country name
                 filtered_top_matches = []
                 seen_tuples = set()
 
                 for top_match in top_matches:
-                    key = top_match[:2] + top_match[3:]  # Exclude the geography field
+                    key = top_match[:2] + top_match[3:]
                     if key not in seen_tuples:
                         filtered_top_matches.append(top_match)
                         seen_tuples.add(key)
@@ -225,16 +233,20 @@ def fuzzy_match_titles(model_titles, database, countries_check, threshold=90):
                 if len(top_matches) == 1:
                     easy_match += 1
                 else:
+                    # Print out those that have not been disambiguated
                     print(model_title)
                     print(top_matches)
                     difficult_match += 1
 
+            # Add matches to matches titles
             matched_titles[model_title] = top_matches
 
     return matched_titles, easy_match, difficult_match
 
-all_data = get_data()
+# Load the model training and test data
+all_data = get_model_data()
 
+# Train model
 train_ratio = .8
 train_size = int(len(all_data) * train_ratio)
 train_data = all_data[:train_size]
@@ -243,29 +255,21 @@ train_data = all_data[:train_size]
 # Load the trained model
 trained_nlp = spacy.load("policy_ner_model")
 
+# Validate model
 val_ratio = 0.1
 val_size = int(len(all_data) * val_ratio)
 val_data = all_data[train_size:train_size + val_size]
-
 val_titles, validation_for_titles = test_model(trained_nlp, "validation", val_data)
 
+# Test model
 test_data = all_data[int(len(all_data) * (train_ratio + val_ratio)):]
 test_titles, test_for_titles = test_model(trained_nlp, "test", test_data)
 
-dataset_path = Path("data/dataset.pkl")
-if dataset_path.exists():
-    with open(dataset_path, "rb") as f:
-        dataset = pickle.load(f)
-else:
-    dataset = Dataset(
-        CPRDocument, cdn_domain="cdn.climatepolicyradar.org"
-    ).from_huggingface()
-    with open(dataset_path, "wb") as f:
-        pickle.dump(dataset, f)
-
+# Match model outputs with our document titles
+dataset = load_documents()
 matched_titles, easy_matches, difficult_matches = fuzzy_match_titles(test_titles, dataset, test_for_titles)
-print(len(test_titles))
-print(easy_matches)
-print(difficult_matches)
 
-
+print("Policies found in text:", len(test_titles))
+print("Policies matching ours:", easy_matches)
+print("Policies matching ours, but can't disambiguate:", difficult_matches)
+print("Policies found, but not matches:", len(test_titles) - easy_matches - difficult_matches)
