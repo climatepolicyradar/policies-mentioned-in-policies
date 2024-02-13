@@ -10,21 +10,17 @@ from src.neo4j import wait_for_neo4j, clear_neo4j
 from rich.console import Console
 from rich.progress import track
 
-def load_dataset():
-    # load the dataset from disk if it exists, otherwise download it from huggingface
-    dataset_path = Path("data/dataset.pkl")
-    if dataset_path.exists():
-        with open(dataset_path, "rb") as f:
-            dataset = pickle.load(f)
-    else:
-        dataset = Dataset(
-            CPRDocument, cdn_domain="cdn.climatepolicyradar.org"
-        ).from_huggingface()
-        with open(dataset_path, "wb") as f:
-            pickle.dump(dataset, f)
-
-    return dataset
-
+# load the dataset from disk if it exists, otherwise download it from huggingface
+dataset_path = Path("data/dataset.pkl")
+if dataset_path.exists():
+    with open(dataset_path, "rb") as f:
+        dataset = pickle.load(f)
+else:
+    dataset = Dataset(
+        CPRDocument, cdn_domain="cdn.climatepolicyradar.org"
+    ).from_huggingface()
+    with open(dataset_path, "wb") as f:
+        pickle.dump(dataset, f)
 
 console = Console(
     highlight=False,
