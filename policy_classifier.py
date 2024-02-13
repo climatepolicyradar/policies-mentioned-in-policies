@@ -12,7 +12,7 @@ from spacy.tokens import Span
 
 from pathlib import Path
 import pickle
-from cpr_data_access.models import Dataset, CPRDocument
+from cpr_data_access.models import Dataset, CPRDocument, GSTDocument
 from src.neo4j import wait_for_neo4j, clear_neo4j
 
 
@@ -160,20 +160,46 @@ def test_model(trained_nlp, stage, test_data):
 
     return predicted_titles, countries_for_titles
 
-def load_documents():
+def load_documents(document_type):
     dataset_path = Path("data/dataset.pkl")
     if dataset_path.exists():
         with open(dataset_path, "rb") as f:
             dataset = pickle.load(f)
     else:
         dataset = Dataset(
-            CPRDocument, cdn_domain="cdn.climatepolicyradar.org"
+            document_type, cdn_domain="cdn.climatepolicyradar.org"
         ).from_huggingface()
         with open(dataset_path, "wb") as f:
             pickle.dump(dataset, f)
     return dataset
 
-def fuzzy_match_titles(model_titles, database, countries_check, threshold=90):
+def test_any_document(trained_nlp, data):
+    predicted_titles = []
+    nlp_countries = spacy.load("en_core_web_sm")
+    countries_for_titles = {}
+
+    text_blocks = [passage for document in data for block in document.text_blocks for passage in block.text][:10000]
+
+    for text in text_blocks:
+        doc = trained_nlp(text)
+
+        # Extract the predicted entities
+        predicted_entities = {(ent.start_char, ent.end_char) for ent in doc.ents}
+
+        doc = nlp_countries(text)
+        # Extract country names using NER
+        countries = set()
+        for ent in doc.ents:
+            if ent.label_ in ["GPE", "LOC"]:
+                countries.add(ent.text)
+
+        for entity in predicted_entities:
+            predicted_titles.append(text[entity[0]:entity[1]])
+            countries_for_titles[text[entity[0]:entity[1]]] = countries
+
+    return predicted_titles, countries_for_titles
+
+def fuzzy_match_titles(model_titles, CPR_data, GST_data, countries_check, threshold=90):
     matched_titles = {}
 
     easy_match = 0
@@ -184,11 +210,20 @@ def fuzzy_match_titles(model_titles, database, countries_check, threshold=90):
         potential_matches = []
 
         # If matches above 90% in the text block then add it as a potential match
-        for document in database:
+        for document in GST_data:
             score = fuzz.ratio(model_title.lower(), document.document_name.lower())
             if score >= threshold:
                 if (document.document_name, document.document_metadata.geography_iso, document.document_metadata.geography, document.document_metadata.publication_ts, score) not in potential_matches:
                     potential_matches.append((document.document_name, document.document_metadata.geography_iso, document.document_metadata.geography, document.document_metadata.publication_ts, score))
+        for document in CPR_data:
+            score = fuzz.ratio(model_title.lower(), document.document_name.lower())
+            if score >= threshold:
+                if (
+                document.document_name, document.document_metadata.geography_iso, document.document_metadata.geography,
+                document.document_metadata.publication_ts, score) not in potential_matches:
+                    potential_matches.append((document.document_name, document.document_metadata.geography_iso,
+                                              document.document_metadata.geography,
+                                              document.document_metadata.publication_ts, score))
 
         # Sort matches and grab all the matches with the top score
         if potential_matches:
@@ -203,6 +238,7 @@ def fuzzy_match_titles(model_titles, database, countries_check, threshold=90):
                 # Attempt to disambiguate
                 if countries_check[model_title]:
                     # Check if country name is mentioned in the text block
+                    print(list(countries_check[model_title]))
                     country_name = list(countries_check[model_title])[0]
 
                     # Match country name mentioned to country of document
@@ -266,10 +302,22 @@ test_data = all_data[int(len(all_data) * (train_ratio + val_ratio)):]
 test_titles, test_for_titles = test_model(trained_nlp, "test", test_data)
 
 # Match model outputs with our document titles
-dataset = load_documents()
-matched_titles, easy_matches, difficult_matches = fuzzy_match_titles(test_titles, dataset, test_for_titles)
+CPR_data = load_documents(CPRDocument)
+GST_data = load_documents(GSTDocument)
+matched_titles, easy_matches, difficult_matches = fuzzy_match_titles(test_titles, CPR_data, GST_data, test_for_titles)
 
-print("Policies found in text:", len(test_titles))
+print("Policies found in test text:", len(test_titles))
 print("Policies matching ours:", easy_matches)
 print("Policies matching ours, but can't disambiguate:", difficult_matches)
 print("Policies found, but not matches:", len(test_titles) - easy_matches - difficult_matches)
+
+# Test out model with fresh data
+# Match model outputs with our document titles
+
+GST_titles, GST_countries = test_any_document(trained_nlp, GST_data)
+matched_titles, easy_matches, difficult_matches = fuzzy_match_titles(GST_titles, CPR_data, GST_data, GST_countries)
+
+print("Policies found in GST text:", len(GST_titles))
+print("Policies matching ours:", easy_matches)
+print("Policies matching ours, but can't disambiguate:", difficult_matches)
+print("Policies found, but not matches:", len(GST_titles) - easy_matches - difficult_matches)
