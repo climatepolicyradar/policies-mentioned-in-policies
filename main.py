@@ -2,7 +2,6 @@ from pathlib import Path
 import pickle
 import neomodel
 import json
-import concurrent.futures
 from collections import defaultdict
 from src.models import FamilyNode, DocumentNode
 from src.text import check_document_geography
@@ -73,62 +72,35 @@ linking_progress_bar = track(
     transient=True,
 )
 
-def process_document(document_i, dataset):
-    mentions_document = set()
+mentions_document = set()
 
+for document_i in linking_progress_bar:
     for document_j in dataset:
         if document_i.document_id == document_j.document_id:
             continue
-
         if document_j.document_metadata.publication_ts < document_i.document_metadata.publication_ts:
-            found_block = check_document_geography(document_i, document_j)
-
-            if found_block:
-                key = (document_i.document_id, document_j.document_id, document_j.document_name, found_block)
-                if key not in mentions_document:
-                    if document_j.document_metadata.geography_iso != document_i.document_metadata.geography_iso:
-                        console.print(
-                            f"\n Found mention of [bold magenta]{document_j.document_name}[/bold magenta] "
-                            f" {document_j.document_metadata} {document_j.translated} "
-                            f"in [bold blue]{document_i.document_name}[/bold blue]"
-                            f" {document_i.document_metadata.geography} {document_i.translated}",
-                            end="\n",
-                        )
-                    mentions_document.add(key)
+            continue
+        found_block = check_document_geography(document_i, document_j)
+        if found_block:
+            key = (document_i.document_id, document_j.document_id, document_j.document_name, found_block)
+            if key not in mentions_document:
+                if document_j.document_metadata.geography_iso != document_i.document_metadata.geography_iso:
                     console.print(
-                        f"Found mention of [bold magenta]{document_j.document_name}[/bold magenta] "
-                        f"in [bold blue]{document_i.document_id}[/bold blue]",
+                        f"\n Found mention of [bold magenta]{document_j.document_name}[/bold magenta] "
+                        f" {document_j.document_metadata} {document_j.translated} "
+                        f"in [bold blue]{document_i.document_name}[/bold blue]"
+                        f" {document_i.document_metadata.geography} {document_i.translated}",
                         end="\n",
                     )
-
-    return list(mentions_document)
-
-def process_documents_batch(batch):
-    results = []
-    for document_i in batch:
-        mentions_document = process_document(document_i, dataset)
-        if mentions_document:
-            results.extend(mentions_document)
-    return results
+                mentions_document.add(key)
+                #console.print(
+                #    f"Found mention of [bold magenta]{document_j.document_name}[/bold magenta] "
+                #    f"in [bold blue]{document_i.document_id}[/bold blue]",
+                #    end="\n",
+                #)
 
 
-mentions = []
-batch_size = 10
-
-if __name__ == "__main__":
-
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        # Process documents in parallel
-        batches = [dataset[i:i + batch_size] for i in range(0, len(dataset), batch_size)]
-        futures = [executor.submit(process_documents_batch, batch) for batch in batches]
-
-        # Wait for all threads to finish
-        concurrent.futures.wait(futures)
-
-    # Combine the results from all processed documents
-        for future in concurrent.futures.as_completed(futures):
-            if future.result():
-                mentions.extend(future.result())
+mentions = list(mentions_document)
 
 for id_i, id_j, name_j, found_block in mentions:
     node_i = DocumentNode.nodes.get(document_id=id_i)
