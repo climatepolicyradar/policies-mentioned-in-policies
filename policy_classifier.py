@@ -238,7 +238,6 @@ def fuzzy_match_titles(model_titles, CPR_data, GST_data, countries_check, thresh
                 # Attempt to disambiguate
                 if countries_check[model_title]:
                     # Check if country name is mentioned in the text block
-                    print(list(countries_check[model_title]))
                     country_name = list(countries_check[model_title])[0]
 
                     # Match country name mentioned to country of document
@@ -270,8 +269,8 @@ def fuzzy_match_titles(model_titles, CPR_data, GST_data, countries_check, thresh
                     easy_match += 1
                 else:
                     # Print out those that have not been disambiguated
-                    print(model_title)
-                    print(top_matches)
+                    #print(model_title)
+                    #print(top_matches)
                     difficult_match += 1
 
             # Add matches to matches titles
@@ -285,25 +284,19 @@ all_data = get_model_data()
 # Train model
 train_ratio = .8
 train_size = int(len(all_data) * train_ratio)
-train_data = all_data[:train_size]
+train_data = all_data[train_size:]
 #train_model(train_data)
 
 # Load the trained model
 trained_nlp = spacy.load("policy_ner_model")
 
-# Validate model
-val_ratio = 0.1
-val_size = int(len(all_data) * val_ratio)
-val_data = all_data[train_size:train_size + val_size]
-val_titles, validation_for_titles = test_model(trained_nlp, "validation", val_data)
-
 # Test model
-test_data = all_data[int(len(all_data) * (train_ratio + val_ratio)):]
+test_data = all_data[:int(len(all_data) * (train_ratio))]
 test_titles, test_for_titles = test_model(trained_nlp, "test", test_data)
 
 # Match model outputs with our document titles
 CPR_data = load_documents(CPRDocument)
-GST_data = load_documents(GSTDocument)
+GST_data = load_documents(GSTDocument) #Subset to 10k text blocks to run faster
 matched_titles, easy_matches, difficult_matches = fuzzy_match_titles(test_titles, CPR_data, GST_data, test_for_titles)
 
 print("Policies found in test text:", len(test_titles))

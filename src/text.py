@@ -36,7 +36,9 @@ def update_geography(geography_iso):
     if geography_iso == "EUR":
         geography_iso = "EUU"
     try:
-        new_geography = pycountry.countries.get(alpha_3=geography_iso).name
+        new_geography = pycountry.countries.get(alpha_3=geography_iso)
+        if new_geography:
+            new_geography = new_geography.name
     except LookupError:
         new_geography = iso_data.get(geography_iso)
     return new_geography
