@@ -10,6 +10,18 @@ from src.neo4j import wait_for_neo4j, clear_neo4j
 from rich.console import Console
 from rich.progress import track
 
+# load the dataset from disk if it exists, otherwise download it from huggingface
+dataset_path = Path("data/dataset.pkl")
+if dataset_path.exists():
+    with open(dataset_path, "rb") as f:
+        dataset = pickle.load(f)
+else:
+    dataset = Dataset(
+        CPRDocument, cdn_domain="cdn.climatepolicyradar.org"
+    ).from_huggingface()
+    with open(dataset_path, "wb") as f:
+        pickle.dump(dataset, f)
+
 console = Console(
     highlight=False,
     log_path=False,
@@ -22,24 +34,7 @@ neomodel.db.set_connection("bolt://neo4j:password@localhost:7687")
 wait_for_neo4j()
 clear_neo4j()
 
-# load the dataset from disk if it exists, otherwise download it from huggingface
-dataset_path = Path("data/dataset.pkl")
-if dataset_path.exists():
-    with console.status("Loading dataset from disk..."):
-        with open(dataset_path, "rb") as f:
-            dataset = pickle.load(f)
-else:
-    with console.status("Loading dataset from huggingface..."):
-        dataset = Dataset(
-            CPRDocument, cdn_domain="cdn.climatepolicyradar.org"
-        ).from_huggingface()
-    with console.status("Saving dataset to disk for future runs..."):
-        with open(dataset_path, "wb") as f:
-            pickle.dump(dataset, f)
-
 console.print("✔️ Loaded dataset!", style="bold green")
-
-dataset = dataset[:200]
 
 # create the nodes for the families and documents
 node_creation_progress_bar = track(
@@ -93,12 +88,11 @@ for document_i in linking_progress_bar:
                         end="\n",
                     )
                 mentions_document.add(key)
-                #console.print(
+                # console.print(
                 #    f"Found mention of [bold magenta]{document_j.document_name}[/bold magenta] "
                 #    f"in [bold blue]{document_i.document_id}[/bold blue]",
                 #    end="\n",
-                #)
-
+                # )
 
 mentions = list(mentions_document)
 

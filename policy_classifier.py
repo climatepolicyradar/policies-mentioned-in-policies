@@ -1,12 +1,20 @@
 import spacy
 import json
 import random
+from fuzzywuzzy import fuzz
+from src.text import update_geography
 from spacy.training import offsets_to_biluo_tags
 from spacy.training.example import Example
 from spacy.matcher import Matcher, PhraseMatcher
 from src.text import normalise_text
 from spacy.language import Language
 from spacy.tokens import Span
+
+from pathlib import Path
+import pickle
+from cpr_data_access.models import Dataset, CPRDocument, GSTDocument
+from src.neo4j import wait_for_neo4j, clear_neo4j
+
 
 @Language.component("match_policy_keywords")
 def match_policy_keywords(doc):
@@ -64,7 +72,7 @@ def create_training_data(data):
 
     return training_data
 
-def get_data():
+def get_model_data():
     # Path to your JSON file
     json_file_path = "mentions.json"
 
@@ -97,7 +105,11 @@ def test_model(trained_nlp, stage, test_data):
     total_correct = 0
     total_predicted = 0
     total_entities = 0
+    predicted_titles = []
 
+    nlp_countries = spacy.load("en_core_web_sm")
+
+    countries_for_titles = {}
     for text, annotations in test_data:
         doc = trained_nlp(text)
 
@@ -105,7 +117,6 @@ def test_model(trained_nlp, stage, test_data):
         bilou_tags = offsets_to_biluo_tags(doc, annotations.get("entities", []))
         if '-' in bilou_tags:
             print("Misaligned entities in text:", text)
-            print("Entities:", entities)
             print("BILOU tags:", bilou_tags)
 
         # Extract the predicted entities
@@ -114,15 +125,16 @@ def test_model(trained_nlp, stage, test_data):
         # Extract the ground truth entities
         ground_truth_entities = {(start, end) for start, end, _ in annotations['entities']}
 
-        #print("Found Blocks:")
-        #print(text)
-        #print("Predicted Entities:")
-        #for entity in predicted_entities:
-        #    print(text[entity[0]:entity[1]])
-        #print("Ground Truth Entities:")
-        #for entity in ground_truth_entities:
-        #    print(text[entity[0]:entity[1]])
-        #print("=" * 50)
+        doc = nlp_countries(text)
+        # Extract country names using NER
+        countries = set()
+        for ent in doc.ents:
+            if ent.label_ in ["GPE", "LOC"]:
+                countries.add(ent.text)
+
+        for entity in predicted_entities:
+            predicted_titles.append(text[entity[0]:entity[1]])
+            countries_for_titles[text[entity[0]:entity[1]]] = countries
 
         # Calculate metrics
         correct_entities = 0
@@ -146,22 +158,166 @@ def test_model(trained_nlp, stage, test_data):
     print(stage, " Recall:", recall)
     print(stage, " F1 Score:", f1_score)
 
+    return predicted_titles, countries_for_titles
 
-all_data = get_data()
+def load_documents(document_type):
+    dataset_path = Path("data/dataset.pkl")
+    if dataset_path.exists():
+        with open(dataset_path, "rb") as f:
+            dataset = pickle.load(f)
+    else:
+        dataset = Dataset(
+            document_type, cdn_domain="cdn.climatepolicyradar.org"
+        ).from_huggingface()
+        with open(dataset_path, "wb") as f:
+            pickle.dump(dataset, f)
+    return dataset
 
+def test_any_document(trained_nlp, data):
+    predicted_titles = []
+    nlp_countries = spacy.load("en_core_web_sm")
+    countries_for_titles = {}
+
+    text_blocks = [passage for document in data for block in document.text_blocks for passage in block.text][:10000]
+
+    for text in text_blocks:
+        doc = trained_nlp(text)
+
+        # Extract the predicted entities
+        predicted_entities = {(ent.start_char, ent.end_char) for ent in doc.ents}
+
+        doc = nlp_countries(text)
+        # Extract country names using NER
+        countries = set()
+        for ent in doc.ents:
+            if ent.label_ in ["GPE", "LOC"]:
+                countries.add(ent.text)
+
+        for entity in predicted_entities:
+            predicted_titles.append(text[entity[0]:entity[1]])
+            countries_for_titles[text[entity[0]:entity[1]]] = countries
+
+    return predicted_titles, countries_for_titles
+
+def fuzzy_match_titles(model_titles, CPR_data, GST_data, countries_check, threshold=90):
+    matched_titles = {}
+
+    easy_match = 0
+    difficult_match = 0
+
+    # Sort through found titles
+    for model_title in model_titles:
+        potential_matches = []
+
+        # If matches above 90% in the text block then add it as a potential match
+        for document in GST_data:
+            score = fuzz.ratio(model_title.lower(), document.document_name.lower())
+            if score >= threshold:
+                if (document.document_name, document.document_metadata.geography_iso, document.document_metadata.geography, document.document_metadata.publication_ts, score) not in potential_matches:
+                    potential_matches.append((document.document_name, document.document_metadata.geography_iso, document.document_metadata.geography, document.document_metadata.publication_ts, score))
+        for document in CPR_data:
+            score = fuzz.ratio(model_title.lower(), document.document_name.lower())
+            if score >= threshold:
+                if (
+                document.document_name, document.document_metadata.geography_iso, document.document_metadata.geography,
+                document.document_metadata.publication_ts, score) not in potential_matches:
+                    potential_matches.append((document.document_name, document.document_metadata.geography_iso,
+                                              document.document_metadata.geography,
+                                              document.document_metadata.publication_ts, score))
+
+        # Sort matches and grab all the matches with the top score
+        if potential_matches:
+            potential_matches.sort(key=lambda x: x[4], reverse=True)
+            # Keep only the top scoring matches
+            top_score = potential_matches[0][4]
+            top_matches = [match for match in potential_matches if match[4] == top_score]
+
+            if len(top_matches) == 1:
+                easy_match += 1
+            else:
+                # Attempt to disambiguate
+                if countries_check[model_title]:
+                    # Check if country name is mentioned in the text block
+                    print(list(countries_check[model_title]))
+                    country_name = list(countries_check[model_title])[0]
+
+                    # Match country name mentioned to country of document
+                    for match in top_matches:
+                        title_geography = match[2]
+                        if title_geography == "nan":
+                            # Try to grab missing geography name with ISO code
+                            new_geography = update_geography(match[1])
+                            title_geography = new_geography
+
+                        if title_geography == country_name:
+                            top_matches = [match]
+                            break
+
+                # Sometimes a country will have a geography iso, but not a name
+                # So here, filter out duplicates, irrespective of country name
+                filtered_top_matches = []
+                seen_tuples = set()
+
+                for top_match in top_matches:
+                    key = top_match[:2] + top_match[3:]
+                    if key not in seen_tuples:
+                        filtered_top_matches.append(top_match)
+                        seen_tuples.add(key)
+
+                top_matches = filtered_top_matches
+
+                if len(top_matches) == 1:
+                    easy_match += 1
+                else:
+                    # Print out those that have not been disambiguated
+                    print(model_title)
+                    print(top_matches)
+                    difficult_match += 1
+
+            # Add matches to matches titles
+            matched_titles[model_title] = top_matches
+
+    return matched_titles, easy_match, difficult_match
+
+# Load the model training and test data
+all_data = get_model_data()
+
+# Train model
 train_ratio = .8
 train_size = int(len(all_data) * train_ratio)
 train_data = all_data[:train_size]
-# train_model(train_data)
+#train_model(train_data)
 
 # Load the trained model
 trained_nlp = spacy.load("policy_ner_model")
 
+# Validate model
 val_ratio = 0.1
 val_size = int(len(all_data) * val_ratio)
 val_data = all_data[train_size:train_size + val_size]
+val_titles, validation_for_titles = test_model(trained_nlp, "validation", val_data)
 
-test_model(trained_nlp, "validation", val_data)
-
+# Test model
 test_data = all_data[int(len(all_data) * (train_ratio + val_ratio)):]
-test_model(trained_nlp, "test", test_data)
+test_titles, test_for_titles = test_model(trained_nlp, "test", test_data)
+
+# Match model outputs with our document titles
+CPR_data = load_documents(CPRDocument)
+GST_data = load_documents(GSTDocument)
+matched_titles, easy_matches, difficult_matches = fuzzy_match_titles(test_titles, CPR_data, GST_data, test_for_titles)
+
+print("Policies found in test text:", len(test_titles))
+print("Policies matching ours:", easy_matches)
+print("Policies matching ours, but can't disambiguate:", difficult_matches)
+print("Policies found, but not matches:", len(test_titles) - easy_matches - difficult_matches)
+
+# Test out model with fresh data
+# Match model outputs with our document titles
+
+GST_titles, GST_countries = test_any_document(trained_nlp, GST_data)
+matched_titles, easy_matches, difficult_matches = fuzzy_match_titles(GST_titles, CPR_data, GST_data, GST_countries)
+
+print("Policies found in GST text:", len(GST_titles))
+print("Policies matching ours:", easy_matches)
+print("Policies matching ours, but can't disambiguate:", difficult_matches)
+print("Policies found, but not matches:", len(GST_titles) - easy_matches - difficult_matches)
