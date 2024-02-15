@@ -23,8 +23,8 @@ This json will be used to train/test the classifier in the PR coming up.
 
 ### NER model 
 
-Made the baseline code more efficient and removed parts to be able to run on the whole corpus and get data for the NER model
-Created (trained, validated, tested) basic NER model
+1. Used output from above code and separated into train and test 
+2. Created (trained, tested) basic NER model
 
 ### Entity Disambiguation
 
@@ -46,4 +46,4 @@ because it takes too long to run and check if the geography is also mentioned in
 The result of this is that are training/test set (mentions.json) only contains examples where the geography 
 of the document and the mention are the same (this excludes a small but non-trivial number of examples). Ticket [here](https://linear.app/climate-policy-radar/issue/RND-898/incorporate-check-of-geography-to-create-test-set).
 
-
+It would be useful for someone to go through our training/test data (mentions.json) and validate the examples.
